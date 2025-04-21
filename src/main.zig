@@ -92,11 +92,11 @@ pub const Vec3 = struct {
     pub fn unitVector(v: Vec3) Vec3 {
         return divScalar(v, v.length());
     }
-};
 
-pub fn dot(u: Vec3, v: Vec3) f64 {
-    return u.e[0] * v.e[0] + u.e[1] * v.e[1] + u.e[2] * v.e[2];
-}
+    pub fn dot(u: Vec3, v: Vec3) f64 {
+        return u.e[0] * v.e[0] + u.e[1] * v.e[1] + u.e[2] * v.e[2];
+    }
+};
 
 pub fn cross(u: Vec3, v: Vec3) Vec3 {
     return Vec3{
@@ -106,10 +106,6 @@ pub fn cross(u: Vec3, v: Vec3) Vec3 {
             u.e[0] * v.e[1] - u.e[1] * v.e[0],
         },
     };
-}
-
-pub fn unitVector(v: Vec3) Vec3 {
-    return Vec3.divScalar(v, v.length());
 }
 
 // Print function for Vec3
@@ -138,7 +134,7 @@ pub const Ray = struct {
     }
 
     pub fn at(self: Ray, t: f64) Point3 {
-        const scaled_dir = Vec3.mutScalar(t, self.dir);
+        const scaled_dir = Vec3.mulScalar(t, self.dir);
         return Vec3.add(self.orig, scaled_dir);
     }
 };
@@ -203,10 +199,29 @@ pub fn main() !void {
             const pixel_center = Vec3.add(Vec3.add(pixel00_loc, Vec3.mulScalar(@floatFromInt(i), pixel_delta_u)), Vec3.mulScalar(@floatFromInt(j), pixel_delta_v));
             const ray_direction = Vec3.sub(pixel_center, camera_center);
             const r = Ray.initWithOriginAndDirection(camera_center, ray_direction);
-            const pixel_color = ray_color(r);
+            const pixel_color = hitSphereColor(r);
 
             try writeColor(file.writer(), pixel_color);
         }
     }
     std.debug.print("\rDone.\n", .{});
+}
+
+pub fn hitSphere(center: Point3, radius: f64, ray: Ray) bool {
+    const oc = Vec3.sub(ray.origin(), center);
+    const a = Vec3.dot(ray.direction(), ray.direction());
+    const b = 2.0 * Vec3.dot(oc, ray.direction());
+    const c = Vec3.dot(oc, oc) - radius * radius;
+    const discriminant = b * b - 4 * a * c;
+    return discriminant >= 0;
+}
+
+pub fn hitSphereColor(ray: Ray) Color {
+    if (hitSphere(Point3.initWithValues(0, 0, -1), 0.5, ray)) {
+        return Color.initWithValues(1, 0, 0);
+    }
+
+    const unit_direction = Vec3.unitVector(ray.direction());
+    const a = 0.5 * (unit_direction.y() + 1.0);
+    return Vec3.add(Vec3.mulScalar(1.0 - a, Color.initWithValues(1.0, 1.0, 1.0)), Vec3.mulScalar(a, Color.initWithValues(0.5, 0.7, 1.0)));
 }
