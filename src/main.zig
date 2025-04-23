@@ -1,6 +1,15 @@
 const std = @import("std");
 const math = std.math;
 
+// constants
+pub const infinity = std.math.inf(f64);
+pub const pi = 3.1415926535897932385;
+
+// util functions
+pub fn degreesToRadians(degrees: f64) f64 {
+    return degrees * pi / 180.0;
+}
+
 pub const Color = Vec3;
 pub const Point3 = Vec3;
 
@@ -96,22 +105,21 @@ pub const Vec3 = struct {
     pub fn dot(u: Vec3, v: Vec3) f64 {
         return u.e[0] * v.e[0] + u.e[1] * v.e[1] + u.e[2] * v.e[2];
     }
+
+    pub fn cross(u: Vec3, v: Vec3) Vec3 {
+        return Vec3{
+            .e = .{
+                u.e[1] * v.e[2] - u.e[2] * v.e[1],
+                u.e[2] * v.e[0] - u.e[0] * v.e[2],
+                u.e[0] * v.e[1] - u.e[1] * v.e[0],
+            },
+        };
+    }
+
+    pub fn print(v: Vec3) void {
+        std.debug.print("{d} {d} {d}\n", .{ v.e[0], v.e[1], v.e[2] });
+    }
 };
-
-pub fn cross(u: Vec3, v: Vec3) Vec3 {
-    return Vec3{
-        .e = .{
-            u.e[1] * v.e[2] - u.e[2] * v.e[1],
-            u.e[2] * v.e[0] - u.e[0] * v.e[2],
-            u.e[0] * v.e[1] - u.e[1] * v.e[0],
-        },
-    };
-}
-
-// Print function for Vec3
-pub fn printVec3(v: Vec3) void {
-    std.debug.print("{d} {d} {d}\n", .{ v.e[0], v.e[1], v.e[2] });
-}
 
 pub const Ray = struct {
     orig: Point3,
@@ -150,12 +158,169 @@ pub fn writeColor(writer: anytype, pixel_color: Color) !void {
     try writer.print("{} {} {}\n", .{ rbyte, gbyte, bbyte });
 }
 
-pub fn ray_color(r: Ray) Vec3 {
+pub fn ray_color(r: Ray, world: *const Hittable) Color {
+    var rec: HitRecord = undefined;
+    if (world.hit(r, 0, infinity, &rec)) {
+        const normal_color = Color.initWithValues(rec.normal.x() + 1, rec.normal.y() + 1, rec.normal.z() + 1);
+        return Vec3.mulScalar(0.5, normal_color);
+    }
+
     const unit_direction = Vec3.unitVector(r.direction());
     const a = 0.5 * (unit_direction.y() + 1.0);
     const white = Color.initWithValues(1.0, 1.0, 1.0);
     const blue = Color.initWithValues(0.5, 0.7, 1.0);
     return Vec3.add(Vec3.mulScalar(1.0 - a, white), Vec3.mulScalar(a, blue));
+}
+
+pub const HitRecord = struct {
+    p: Point3,
+    normal: Vec3,
+    t: f64,
+    front_face: bool,
+
+    pub fn set_face_normal(self: *HitRecord, r: Ray, outward_normal: Vec3) void {
+        self.front_face = Vec3.dot(r.direction(), outward_normal) < 0;
+        self.normal = if (self.front_face) outward_normal else outward_normal.negate();
+    }
+};
+
+pub const Hittable = struct {
+    const VTable = struct {
+        hit: *const fn (self: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool,
+    };
+
+    ptr: *const anyopaque,
+    vtable: *const VTable,
+
+    pub fn hit(self: Hittable, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+        return self.vtable.hit(self.ptr, r, ray_tmin, ray_tmax, rec);
+    }
+};
+
+pub const Sphere = struct {
+    center: Point3,
+    radius: f64,
+
+    pub fn init(center: Point3, radius: f64) Sphere {
+        return Sphere{
+            .center = center,
+            .radius = if (radius > 0) radius else 0,
+        };
+    }
+
+    pub fn toHittable(self: *const Sphere) Hittable {
+        return Hittable{
+            .ptr = self,
+            .vtable = &.{
+                .hit = hit,
+            },
+        };
+    }
+
+    fn hit(ctx: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+        const self: *const Sphere = @ptrCast(@alignCast(ctx));
+        const oc = Vec3.sub(self.center, r.origin());
+        const a = Vec3.dot(r.direction(), r.direction());
+        const h = Vec3.dot(r.direction(), oc);
+        const c = Vec3.dot(oc, oc) - self.radius * self.radius;
+
+        const discriminant = h * h - a * c;
+        if (discriminant < 0) return false;
+
+        const sqrtd = @sqrt(discriminant);
+        // Find the nearest root that lies in the acceptable range
+        var root = (h - sqrtd) / a;
+        if (root <= ray_tmin or ray_tmax <= root) {
+            root = (h + sqrtd) / a;
+            if (root <= ray_tmin or ray_tmax <= root) {
+                return false;
+            }
+        }
+
+        rec.t = root;
+        rec.p = r.at(rec.t);
+        const outward_normal = Vec3.divScalar(Vec3.sub(rec.p, self.center), self.radius);
+        rec.set_face_normal(r, outward_normal);
+
+        return true;
+    }
+};
+
+pub const HittableList = struct {
+    objects: std.ArrayList(Hittable),
+
+    pub fn init(allocator: std.mem.Allocator) HittableList {
+        return HittableList{
+            .objects = std.ArrayList(Hittable).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *HittableList) void {
+        self.objects.deinit();
+    }
+
+    pub fn clear(self: *HittableList) void {
+        self.objects.clearRetainingCapacity();
+    }
+
+    pub fn add(self: *HittableList, object: Hittable) !void {
+        try self.objects.append(object);
+    }
+
+    pub fn hit(self: *const HittableList, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+        var temp_rec: HitRecord = undefined;
+        var hit_anything = false;
+        var closest_so_far = ray_tmax;
+
+        for (self.objects.items) |object| {
+            if (object.hit(r, ray_tmin, closest_so_far, &temp_rec)) {
+                hit_anything = true;
+                closest_so_far = temp_rec.t;
+                rec.* = temp_rec;
+            }
+        }
+
+        return hit_anything;
+    }
+
+    pub fn toHittable(self: *const HittableList) Hittable {
+        return Hittable{
+            .ptr = self,
+            .vtable = &.{
+                .hit = hitImpl,
+            },
+        };
+    }
+
+    fn hitImpl(ctx: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+        const self: *const HittableList = @ptrCast(@alignCast(ctx));
+        return self.hit(r, ray_tmin, ray_tmax, rec);
+    }
+};
+
+pub fn hitSphere(center: Point3, radius: f64, ray: Ray) f64 {
+    const oc = Vec3.sub(ray.origin(), center);
+    const a = ray.direction().lengthSquared();
+    const h = Vec3.dot(oc, ray.direction());
+    const c = oc.lengthSquared() - radius * radius;
+    const discriminant = h * h - a * c;
+    if (discriminant < 0) {
+        return -1;
+    }
+    return (h - math.sqrt(discriminant)) / a;
+}
+
+pub fn hitSphereColor(ray: Ray) Color {
+    const t = hitSphere(Point3.initWithValues(0, 0, -1), 0.5, ray);
+    if (t > 0) {
+        const N = Vec3.unitVector(Vec3.sub(ray.at(t), Point3.initWithValues(0, 0, -1)));
+        const color_with_normal = Color.initWithValues(N.x() + 1, N.y() + 1, N.z() + 1);
+        return Vec3.mulScalar(0.5, color_with_normal);
+    }
+
+    const unit_direction = Vec3.unitVector(ray.direction());
+    const a = 0.5 * (unit_direction.y() + 1.0);
+    return Vec3.add(Vec3.mulScalar(1.0 - a, Color.initWithValues(1.0, 1.0, 1.0)), Vec3.mulScalar(a, Color.initWithValues(0.5, 0.7, 1.0)));
 }
 
 pub fn main() !void {
@@ -165,8 +330,17 @@ pub fn main() !void {
     const temp_image_height: u32 = @intFromFloat(image_width / aspect_ratio);
     const image_height = if (temp_image_height < 1) 1 else temp_image_height;
 
-    // Camera
+    // World
+    const allocator = std.heap.page_allocator;
+    var world = HittableList.init(allocator);
+    defer world.deinit();
 
+    try world.add(Sphere.init(Point3.initWithValues(0, 0, -1), 0.5).toHittable());
+    try world.add(Sphere.init(Point3.initWithValues(0, -100.5, -1), 100).toHittable());
+
+    const hittable_world = world.toHittable();
+
+    // Camera
     const focal_length: f64 = 1.0;
     const viewport_height: f64 = 2.0;
     const viewport_width: f64 = viewport_height * (@as(f64, @floatFromInt(image_width)) / @as(f64, @floatFromInt(image_height)));
@@ -199,29 +373,10 @@ pub fn main() !void {
             const pixel_center = Vec3.add(Vec3.add(pixel00_loc, Vec3.mulScalar(@floatFromInt(i), pixel_delta_u)), Vec3.mulScalar(@floatFromInt(j), pixel_delta_v));
             const ray_direction = Vec3.sub(pixel_center, camera_center);
             const r = Ray.initWithOriginAndDirection(camera_center, ray_direction);
-            const pixel_color = hitSphereColor(r);
+            const pixel_color = ray_color(r, &hittable_world);
 
             try writeColor(file.writer(), pixel_color);
         }
     }
     std.debug.print("\rDone.\n", .{});
-}
-
-pub fn hitSphere(center: Point3, radius: f64, ray: Ray) bool {
-    const oc = Vec3.sub(ray.origin(), center);
-    const a = Vec3.dot(ray.direction(), ray.direction());
-    const b = 2.0 * Vec3.dot(oc, ray.direction());
-    const c = Vec3.dot(oc, oc) - radius * radius;
-    const discriminant = b * b - 4 * a * c;
-    return discriminant >= 0;
-}
-
-pub fn hitSphereColor(ray: Ray) Color {
-    if (hitSphere(Point3.initWithValues(0, 0, -1), 0.5, ray)) {
-        return Color.initWithValues(1, 0, 0);
-    }
-
-    const unit_direction = Vec3.unitVector(ray.direction());
-    const a = 0.5 * (unit_direction.y() + 1.0);
-    return Vec3.add(Vec3.mulScalar(1.0 - a, Color.initWithValues(1.0, 1.0, 1.0)), Vec3.mulScalar(a, Color.initWithValues(0.5, 0.7, 1.0)));
 }
