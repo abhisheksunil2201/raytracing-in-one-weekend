@@ -1,4 +1,3 @@
 main
-*.o 
-*.ppm
+*.o
 .zig-cache

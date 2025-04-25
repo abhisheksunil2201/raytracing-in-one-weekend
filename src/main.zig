@@ -160,7 +160,7 @@ pub fn writeColor(writer: anytype, pixel_color: Color) !void {
 
 pub fn ray_color(r: Ray, world: *const Hittable) Color {
     var rec: HitRecord = undefined;
-    if (world.hit(r, 0, infinity, &rec)) {
+    if (world.hit(r, Interval.initWithValues(0, infinity), &rec)) {
         const normal_color = Color.initWithValues(rec.normal.x() + 1, rec.normal.y() + 1, rec.normal.z() + 1);
         return Vec3.mulScalar(0.5, normal_color);
     }
@@ -186,14 +186,14 @@ pub const HitRecord = struct {
 
 pub const Hittable = struct {
     const VTable = struct {
-        hit: *const fn (self: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool,
+        hit: *const fn (self: *const anyopaque, r: Ray, ray_t: Interval, rec: *HitRecord) bool,
     };
 
     ptr: *const anyopaque,
     vtable: *const VTable,
 
-    pub fn hit(self: Hittable, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
-        return self.vtable.hit(self.ptr, r, ray_tmin, ray_tmax, rec);
+    pub fn hit(self: Hittable, r: Ray, ray_t: Interval, rec: *HitRecord) bool {
+        return self.vtable.hit(self.ptr, r, ray_t, rec);
     }
 };
 
@@ -217,7 +217,7 @@ pub const Sphere = struct {
         };
     }
 
-    fn hit(ctx: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+    fn hit(ctx: *const anyopaque, r: Ray, ray_t: Interval, rec: *HitRecord) bool {
         const self: *const Sphere = @ptrCast(@alignCast(ctx));
         const oc = Vec3.sub(self.center, r.origin());
         const a = Vec3.dot(r.direction(), r.direction());
@@ -230,9 +230,9 @@ pub const Sphere = struct {
         const sqrtd = @sqrt(discriminant);
         // Find the nearest root that lies in the acceptable range
         var root = (h - sqrtd) / a;
-        if (root <= ray_tmin or ray_tmax <= root) {
+        if (!ray_t.surrounds(root)) {
             root = (h + sqrtd) / a;
-            if (root <= ray_tmin or ray_tmax <= root) {
+            if (!ray_t.surrounds(root)) {
                 return false;
             }
         }
@@ -267,13 +267,13 @@ pub const HittableList = struct {
         try self.objects.append(object);
     }
 
-    pub fn hit(self: *const HittableList, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+    pub fn hit(self: *const HittableList, r: Ray, ray_t: Interval, rec: *HitRecord) bool {
         var temp_rec: HitRecord = undefined;
         var hit_anything = false;
-        var closest_so_far = ray_tmax;
+        var closest_so_far = ray_t.max;
 
         for (self.objects.items) |object| {
-            if (object.hit(r, ray_tmin, closest_so_far, &temp_rec)) {
+            if (object.hit(r, Interval.initWithValues(ray_t.min, closest_so_far), &temp_rec)) {
                 hit_anything = true;
                 closest_so_far = temp_rec.t;
                 rec.* = temp_rec;
@@ -292,9 +292,9 @@ pub const HittableList = struct {
         };
     }
 
-    fn hitImpl(ctx: *const anyopaque, r: Ray, ray_tmin: f64, ray_tmax: f64, rec: *HitRecord) bool {
+    fn hitImpl(ctx: *const anyopaque, r: Ray, ray_t: Interval, rec: *HitRecord) bool {
         const self: *const HittableList = @ptrCast(@alignCast(ctx));
-        return self.hit(r, ray_tmin, ray_tmax, rec);
+        return self.hit(r, ray_t, rec);
     }
 };
 
@@ -322,6 +322,34 @@ pub fn hitSphereColor(ray: Ray) Color {
     const a = 0.5 * (unit_direction.y() + 1.0);
     return Vec3.add(Vec3.mulScalar(1.0 - a, Color.initWithValues(1.0, 1.0, 1.0)), Vec3.mulScalar(a, Color.initWithValues(0.5, 0.7, 1.0)));
 }
+
+pub const Interval = struct {
+    min: f64,
+    max: f64,
+    pub fn init() Interval {
+        return Interval{
+            .min = infinity,
+            .max = -infinity,
+        };
+    }
+    pub fn initWithValues(min_val: f64, max_val: f64) Interval {
+        return Interval{
+            .min = min_val,
+            .max = max_val,
+        };
+    }
+    pub fn size(self: Interval) f64 {
+        return self.max - self.min;
+    }
+    pub fn contains(self: Interval, x: f64) bool {
+        return self.min <= x and x <= self.max;
+    }
+    pub fn surrounds(self: Interval, x: f64) bool {
+        return self.min < x and x < self.max;
+    }
+    pub const empty = Interval.init();
+    pub const universe = Interval.initWithValues(-infinity, infinity);
+};
 
 pub fn main() !void {
     const aspect_ratio: f64 = 16.0 / 9.0;
