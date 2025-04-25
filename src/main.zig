@@ -351,60 +351,77 @@ pub const Interval = struct {
     pub const universe = Interval.initWithValues(-infinity, infinity);
 };
 
+pub const Camera = struct {
+    aspect_ratio: f64 = 1.0,
+    image_width: u32 = 400,
+    image_height: u32 = undefined,
+    center: Point3 = undefined,
+    pixel00_loc: Point3 = undefined,
+    pixel_delta_u: Vec3 = undefined,
+    pixel_delta_v: Vec3 = undefined,
+    pub fn init() Camera {
+        return Camera{
+            .aspect_ratio = 1.0,
+            .image_width = 100,
+            .image_height = undefined,
+            .center = Point3.init(),
+            .pixel00_loc = undefined,
+            .pixel_delta_u = undefined,
+            .pixel_delta_v = undefined,
+        };
+    }
+    pub fn initialize(self: *Camera) void {
+        self.image_height = @intFromFloat(@as(f64, @floatFromInt(self.image_width)) / self.aspect_ratio);
+        self.image_height = if (self.image_height < 1) 1 else self.image_height;
+        self.center = Point3.initWithValues(0, 0, 0);
+        const focal_length: f64 = 1.0;
+        const viewport_height: f64 = 2.0;
+        const viewport_width: f64 = viewport_height * (@as(f64, @floatFromInt(self.image_width)) / @as(f64, @floatFromInt(self.image_height)));
+        // Calculate the vectors across the horizontal and down the vertical viewport edges.
+        const viewport_u = Vec3.initWithValues(viewport_width, 0, 0);
+        const viewport_v = Vec3.initWithValues(0, -viewport_height, 0);
+        // Calculate the horizontal and vertical delta vectors from pixel to pixel.
+        self.pixel_delta_u = Vec3.divScalar(viewport_u, @as(f64, @floatFromInt(self.image_width)));
+        self.pixel_delta_v = Vec3.divScalar(viewport_v, @as(f64, @floatFromInt(self.image_height)));
+        // Calculate the location of the upper left pixel.
+        const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.initWithValues(0, 0, focal_length)), Vec3.divScalar(viewport_u, 2)), Vec3.divScalar(viewport_v, 2));
+        self.pixel00_loc = Vec3.add(viewport_upper_left, Vec3.mulScalar(0.5, Vec3.add(self.pixel_delta_u, self.pixel_delta_v)));
+    }
+    pub fn render(self: *Camera, world: *const Hittable, writer: anytype) !void {
+        self.initialize();
+        try writer.print("P3\n{} {}\n255\n", .{ self.image_width, self.image_height });
+        var j: u32 = 0;
+        while (j < self.image_height) : (j += 1) {
+            std.debug.print("\rScanlines remaining: {} ", .{self.image_height - j});
+            var i: u32 = 0;
+            while (i < self.image_width) : (i += 1) {
+                const pixel_center = Vec3.add(Vec3.add(self.pixel00_loc, Vec3.mulScalar(@floatFromInt(i), self.pixel_delta_u)), Vec3.mulScalar(@floatFromInt(j), self.pixel_delta_v));
+                const ray_direction = Vec3.sub(pixel_center, self.center);
+                const r = Ray.initWithOriginAndDirection(self.center, ray_direction);
+                const pixel_color = ray_color(r, world);
+                try writeColor(writer, pixel_color);
+            }
+        }
+        std.debug.print("\rDone.\n", .{});
+    }
+};
+
 pub fn main() !void {
-    const aspect_ratio: f64 = 16.0 / 9.0;
-    const image_width: u32 = 400;
-
-    const temp_image_height: u32 = @intFromFloat(image_width / aspect_ratio);
-    const image_height = if (temp_image_height < 1) 1 else temp_image_height;
-
-    // World
     const allocator = std.heap.page_allocator;
+
+    //World
     var world = HittableList.init(allocator);
     defer world.deinit();
 
     try world.add(Sphere.init(Point3.initWithValues(0, 0, -1), 0.5).toHittable());
     try world.add(Sphere.init(Point3.initWithValues(0, -100.5, -1), 100).toHittable());
-
     const hittable_world = world.toHittable();
+    var cam = Camera.init();
+    cam.aspect_ratio = 16.0 / 9.0;
+    cam.image_width = 400;
 
-    // Camera
-    const focal_length: f64 = 1.0;
-    const viewport_height: f64 = 2.0;
-    const viewport_width: f64 = viewport_height * (@as(f64, @floatFromInt(image_width)) / @as(f64, @floatFromInt(image_height)));
-    const camera_center = Point3.initWithValues(0, 0, 0);
-
-    // Calculate the vectors across the horizontal and down the vertical viewport edges.
-    const viewport_u = Vec3.initWithValues(viewport_width, 0, 0);
-    const viewport_v = Vec3.initWithValues(0, -viewport_height, 0);
-
-    // Calculate the horizontal and vertical delta vectors from pixel to pixel.
-    const pixel_delta_u = Vec3.divScalar(viewport_u, @as(f64, @floatFromInt(image_width)));
-    const pixel_delta_v = Vec3.divScalar(viewport_v, @as(f64, @floatFromInt(image_height)));
-
-    // Calculate the location of the upper left pixel.
-    const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(camera_center, Vec3.initWithValues(0, 0, focal_length)), Vec3.divScalar(viewport_u, 2)), Vec3.divScalar(viewport_v, 2));
-    const pixel00_loc = Vec3.add(viewport_upper_left, Vec3.mulScalar(0.5, Vec3.add(pixel_delta_u, pixel_delta_v)));
-
-    // Open a file for writing
+    // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
     defer file.close();
-    //P3 Header
-    try file.writer().print("P3\n{} {}\n255\n", .{ image_width, image_height });
-
-    //Iterate over each pixel and output RGB
-    var j: usize = 0;
-    while (j < image_height) : (j += 1) {
-        std.debug.print("\rScanlines remaining: {} ", .{image_height - j});
-        var i: u32 = 0;
-        while (i < image_width) : (i += 1) {
-            const pixel_center = Vec3.add(Vec3.add(pixel00_loc, Vec3.mulScalar(@floatFromInt(i), pixel_delta_u)), Vec3.mulScalar(@floatFromInt(j), pixel_delta_v));
-            const ray_direction = Vec3.sub(pixel_center, camera_center);
-            const r = Ray.initWithOriginAndDirection(camera_center, ray_direction);
-            const pixel_color = ray_color(r, &hittable_world);
-
-            try writeColor(file.writer(), pixel_color);
-        }
-    }
-    std.debug.print("\rDone.\n", .{});
+    try cam.render(&hittable_world, file.writer());
 }
