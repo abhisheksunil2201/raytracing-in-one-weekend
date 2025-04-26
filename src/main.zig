@@ -10,6 +10,16 @@ pub fn degreesToRadians(degrees: f64) f64 {
     return degrees * pi / 180.0;
 }
 
+pub fn randomDouble() f64 {
+    // Returns random f64 in [0, 1)
+    return std.crypto.random.float(f64);
+}
+
+pub fn randomDoubleRange(min: f64, max: f64) f64 {
+    // Returns random f64 in [min, max)
+    return min + (max - min) * randomDouble();
+}
+
 pub const Color = Vec3;
 pub const Point3 = Vec3;
 
@@ -152,9 +162,10 @@ pub fn writeColor(writer: anytype, pixel_color: Color) !void {
     const g = pixel_color.y();
     const b = pixel_color.z();
 
-    const rbyte = @as(u8, @intFromFloat(255.999 * r));
-    const gbyte = @as(u8, @intFromFloat(255.999 * g));
-    const bbyte = @as(u8, @intFromFloat(255.999 * b));
+    const intensity = Interval.initWithValues(0.000, 0.999);
+    const rbyte = @as(u8, @intFromFloat(256 * intensity.clamp(r)));
+    const gbyte = @as(u8, @intFromFloat(256 * intensity.clamp(g)));
+    const bbyte = @as(u8, @intFromFloat(256 * intensity.clamp(b)));
     try writer.print("{} {} {}\n", .{ rbyte, gbyte, bbyte });
 }
 
@@ -347,6 +358,11 @@ pub const Interval = struct {
     pub fn surrounds(self: Interval, x: f64) bool {
         return self.min < x and x < self.max;
     }
+    pub fn clamp(self: Interval, x: f64) f64 {
+        if (x < self.min) return self.min;
+        if (x > self.max) return self.max;
+        return x;
+    }
     pub const empty = Interval.init();
     pub const universe = Interval.initWithValues(-infinity, infinity);
 };
@@ -354,6 +370,7 @@ pub const Interval = struct {
 pub const Camera = struct {
     aspect_ratio: f64 = 1.0,
     image_width: u32 = 400,
+    samples_per_pixel: u32 = 1.0, //Count of random samples for each pixel
     image_height: u32 = undefined,
     center: Point3 = undefined,
     pixel00_loc: Point3 = undefined,
@@ -363,6 +380,7 @@ pub const Camera = struct {
         return Camera{
             .aspect_ratio = 1.0,
             .image_width = 100,
+            .samples_per_pixel = 10,
             .image_height = undefined,
             .center = Point3.init(),
             .pixel00_loc = undefined,
@@ -387,19 +405,39 @@ pub const Camera = struct {
         const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.initWithValues(0, 0, focal_length)), Vec3.divScalar(viewport_u, 2)), Vec3.divScalar(viewport_v, 2));
         self.pixel00_loc = Vec3.add(viewport_upper_left, Vec3.mulScalar(0.5, Vec3.add(self.pixel_delta_u, self.pixel_delta_v)));
     }
+    fn sampleSquare() Vec3 {
+        // Returns a random point in the [-0.5, -0.5]-[+0.5, +0.5] unit square
+        return Vec3.initWithValues(randomDouble() - 0.5, // Using your existing random function
+            randomDouble() - 0.5, 0);
+    }
+    pub fn getRay(self: *const Camera, i: u32, j: u32) Ray {
+        // Get random offset within pixel
+        const offset = sampleSquare();
+        // Calculate sample position
+        const pixel_sample = Vec3.add(Vec3.add(self.pixel00_loc, Vec3.mulScalar(@as(f64, @floatFromInt(i)) + offset.x(), self.pixel_delta_u)), Vec3.mulScalar(@as(f64, @floatFromInt(j)) + offset.y(), self.pixel_delta_v));
+        const ray_origin = self.center;
+        const ray_direction = Vec3.sub(pixel_sample, ray_origin);
+
+        return Ray.initWithOriginAndDirection(ray_origin, ray_direction);
+    }
     pub fn render(self: *Camera, world: *const Hittable, writer: anytype) !void {
         self.initialize();
         try writer.print("P3\n{} {}\n255\n", .{ self.image_width, self.image_height });
+
+        const scale = 1.0 / @as(f64, @floatFromInt(self.samples_per_pixel));
+
         var j: u32 = 0;
         while (j < self.image_height) : (j += 1) {
             std.debug.print("\rScanlines remaining: {} ", .{self.image_height - j});
             var i: u32 = 0;
             while (i < self.image_width) : (i += 1) {
-                const pixel_center = Vec3.add(Vec3.add(self.pixel00_loc, Vec3.mulScalar(@floatFromInt(i), self.pixel_delta_u)), Vec3.mulScalar(@floatFromInt(j), self.pixel_delta_v));
-                const ray_direction = Vec3.sub(pixel_center, self.center);
-                const r = Ray.initWithOriginAndDirection(self.center, ray_direction);
-                const pixel_color = ray_color(r, world);
-                try writeColor(writer, pixel_color);
+                var pixel_color = Color.init();
+                var sample: u32 = 0;
+                while (sample < self.samples_per_pixel) : (sample += 1) {
+                    const r = self.getRay(i, j);
+                    pixel_color.addAssign(ray_color(r, world));
+                }
+                try writeColor(writer, Vec3.mulScalar(scale, pixel_color));
             }
         }
         std.debug.print("\rDone.\n", .{});
@@ -419,6 +457,7 @@ pub fn main() !void {
     var cam = Camera.init();
     cam.aspect_ratio = 16.0 / 9.0;
     cam.image_width = 400;
+    cam.samples_per_pixel = 100;
 
     // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
