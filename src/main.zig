@@ -88,6 +88,14 @@ pub const Vec3 = struct {
         return self.e[0] * self.e[0] + self.e[1] * self.e[1] + self.e[2] * self.e[2];
     }
 
+    pub fn random() Vec3 {
+        return Vec3.initWithValues(randomDouble(), randomDouble(), randomDouble());
+    }
+
+    pub fn randomInRange(min: f64, max: f64) Vec3 {
+        return Vec3.initWithValues(randomDoubleRange(min, max), randomDoubleRange(min, max), randomDoubleRange(min, max));
+    }
+
     pub fn add(u: Vec3, v: Vec3) Vec3 {
         return Vec3{ .e = .{ u.e[0] + v.e[0], u.e[1] + v.e[1], u.e[2] + v.e[2] } };
     }
@@ -110,6 +118,23 @@ pub const Vec3 = struct {
 
     pub fn unitVector(v: Vec3) Vec3 {
         return divScalar(v, v.length());
+    }
+
+    pub fn randomUnitVector() Vec3 {
+        while (true) {
+            const p = Vec3.randomInRange(-1, 1);
+            const lensq = p.lengthSquared();
+            if (1e-160 < lensq and lensq <= 1) return Vec3.divScalar(p, math.sqrt(lensq));
+        }
+    }
+
+    pub fn randomOnHemisphere(normal: Vec3) Vec3 {
+        const onUnitSphere = randomUnitVector();
+        if (dot(onUnitSphere, normal) > 0) {
+            return onUnitSphere; // In the same hemisphere as normal
+        } else {
+            return Vec3.negate(onUnitSphere);
+        }
     }
 
     pub fn dot(u: Vec3, v: Vec3) f64 {
@@ -172,8 +197,8 @@ pub fn writeColor(writer: anytype, pixel_color: Color) !void {
 pub fn ray_color(r: Ray, world: *const Hittable) Color {
     var rec: HitRecord = undefined;
     if (world.hit(r, Interval.initWithValues(0, infinity), &rec)) {
-        const normal_color = Color.initWithValues(rec.normal.x() + 1, rec.normal.y() + 1, rec.normal.z() + 1);
-        return Vec3.mulScalar(0.5, normal_color);
+        const direction = Vec3.randomOnHemisphere(rec.normal);
+        return Vec3.mulScalar(0.5, ray_color(Ray.initWithOriginAndDirection(rec.p, direction), world));
     }
 
     const unit_direction = Vec3.unitVector(r.direction());
