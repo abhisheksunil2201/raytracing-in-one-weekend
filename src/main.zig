@@ -137,6 +137,13 @@ pub const Vec3 = struct {
         }
     }
 
+    pub fn linearToGamma(linear_component: f64) f64 {
+        //to go from linear to gamma, we take inverse of gamma2
+        //i.e. exponent of 1/gamma -> square root
+        if (linear_component > 0) return math.sqrt(linear_component);
+        return 0;
+    }
+
     pub fn dot(u: Vec3, v: Vec3) f64 {
         return u.e[0] * v.e[0] + u.e[1] * v.e[1] + u.e[2] * v.e[2];
     }
@@ -183,9 +190,14 @@ pub const Ray = struct {
 };
 
 pub fn writeColor(writer: anytype, pixel_color: Color) !void {
-    const r = pixel_color.x();
-    const g = pixel_color.y();
-    const b = pixel_color.z();
+    var r = pixel_color.x();
+    var g = pixel_color.y();
+    var b = pixel_color.z();
+
+    //Apply linear to gamma transform for gamma 2
+    r = Color.linearToGamma(r);
+    g = Color.linearToGamma(g);
+    b = Color.linearToGamma(b);
 
     const intensity = Interval.initWithValues(0.000, 0.999);
     const rbyte = @as(u8, @intFromFloat(256 * intensity.clamp(r)));
@@ -194,11 +206,15 @@ pub fn writeColor(writer: anytype, pixel_color: Color) !void {
     try writer.print("{} {} {}\n", .{ rbyte, gbyte, bbyte });
 }
 
-pub fn ray_color(r: Ray, world: *const Hittable) Color {
+pub fn ray_color(r: Ray, depth: i32, world: *const Hittable) Color {
+    if (depth <= 0) return Color.init();
+
     var rec: HitRecord = undefined;
-    if (world.hit(r, Interval.initWithValues(0, infinity), &rec)) {
-        const direction = Vec3.randomOnHemisphere(rec.normal);
-        return Vec3.mulScalar(0.5, ray_color(Ray.initWithOriginAndDirection(rec.p, direction), world));
+    if (world.hit(r, Interval.initWithValues(0.001, infinity), &rec)) {
+        //Randomly generating vector using Lambertian distribution(more pronounced shadow)
+        const direction = Vec3.add(rec.normal, Vec3.randomOnHemisphere(rec.normal));
+        return Vec3.mulScalar(0.7, ray_color(Ray.initWithOriginAndDirection(rec.p, direction), depth - 1, world));
+        //0.5 is the reflectance
     }
 
     const unit_direction = Vec3.unitVector(r.direction());
@@ -401,6 +417,7 @@ pub const Camera = struct {
     pixel00_loc: Point3 = undefined,
     pixel_delta_u: Vec3 = undefined,
     pixel_delta_v: Vec3 = undefined,
+    max_depth: i32 = 10,
     pub fn init() Camera {
         return Camera{
             .aspect_ratio = 1.0,
@@ -460,7 +477,7 @@ pub const Camera = struct {
                 var sample: u32 = 0;
                 while (sample < self.samples_per_pixel) : (sample += 1) {
                     const r = self.getRay(i, j);
-                    pixel_color.addAssign(ray_color(r, world));
+                    pixel_color.addAssign(ray_color(r, self.max_depth, world));
                 }
                 try writeColor(writer, Vec3.mulScalar(scale, pixel_color));
             }
@@ -483,6 +500,7 @@ pub fn main() !void {
     cam.aspect_ratio = 16.0 / 9.0;
     cam.image_width = 400;
     cam.samples_per_pixel = 100;
+    cam.max_depth = 50;
 
     // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
