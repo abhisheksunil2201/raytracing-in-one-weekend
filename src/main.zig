@@ -362,9 +362,10 @@ pub const Lambertian = struct {
 
 pub const Metal = struct {
     albedo: Color,
+    fuzz: f64,
     const material_vtable = Material.VTable{ .scatter = scatterImpl };
-    pub fn init(albedo: Color) Metal {
-        return Metal{ .albedo = albedo };
+    pub fn init(albedo: Color, fuzz: f64) Metal {
+        return Metal{ .albedo = albedo, .fuzz = if (fuzz < 1) fuzz else 1 };
     }
 
     pub fn toMaterial(self: *const Metal) Material {
@@ -373,10 +374,11 @@ pub const Metal = struct {
 
     fn scatterImpl(ctx: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
         const self: *const Metal = @ptrCast(@alignCast(ctx));
-        const reflected = Vec3.reflect(r_in.direction(), rec.normal);
-        scattered.* = Ray.initWithOriginAndDirection(rec.p, reflected);
+        const reflected = Vec3.reflect(Vec3.unitVector(r_in.direction()), rec.normal);
+        const fuzzy_reflection = Vec3.add(reflected, Vec3.mulScalar(self.fuzz, Vec3.randomUnitVector()));
+        scattered.* = Ray.initWithOriginAndDirection(rec.p, fuzzy_reflection);
         attenuation.* = self.albedo;
-        return true;
+        return Vec3.dot(scattered.direction(), rec.normal) > 0;
     }
 };
 
@@ -578,8 +580,8 @@ pub fn main() !void {
     //Materials
     const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
     const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
-    const material_left = Metal.init(Color.initWithValues(0.8, 0.8, 0.8)).toMaterial();
-    const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2)).toMaterial();
+    const material_left = Metal.init(Color.initWithValues(0.8, 0.8, 0.8), 0.3).toMaterial();
+    const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
 
     // Spheres
     try world.add(Sphere.init(Point3.initWithValues(0.0, -100.5, -1.0), 100.0, material_ground).toHittable());
