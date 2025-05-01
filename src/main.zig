@@ -573,34 +573,38 @@ pub const Camera = struct {
     pixel00_loc: Point3 = undefined,
     pixel_delta_u: Vec3 = undefined,
     pixel_delta_v: Vec3 = undefined,
+    u: Vec3 = undefined,
+    v: Vec3 = undefined,
+    w: Vec3 = undefined,
     max_depth: i32 = 10,
+    vfov: f64 = 90, //field of view
+    lookFrom: Point3 = Point3.init(),
+    lookAt: Point3 = Point3.initWithValues(0.0, 0.0, -1.0),
+    vup: Vec3 = Vec3.initWithValues(0.0, 1.0, 0.0),
     pub fn init() Camera {
-        return Camera{
-            .aspect_ratio = 1.0,
-            .image_width = 100,
-            .samples_per_pixel = 10,
-            .image_height = undefined,
-            .center = Point3.init(),
-            .pixel00_loc = undefined,
-            .pixel_delta_u = undefined,
-            .pixel_delta_v = undefined,
-        };
+        return Camera{};
     }
     pub fn initialize(self: *Camera) void {
         self.image_height = @intFromFloat(@as(f64, @floatFromInt(self.image_width)) / self.aspect_ratio);
         self.image_height = if (self.image_height < 1) 1 else self.image_height;
-        self.center = Point3.initWithValues(0, 0, 0);
-        const focal_length: f64 = 1.0;
-        const viewport_height: f64 = 2.0;
+        self.center = self.lookFrom;
+        const focal_length: f64 = Point3.length(Point3.sub(self.lookFrom, self.lookAt));
+        const theta = degreesToRadians(self.vfov);
+        const h = @tan(theta / 2);
+        const viewport_height: f64 = 2.0 * h * focal_length;
         const viewport_width: f64 = viewport_height * (@as(f64, @floatFromInt(self.image_width)) / @as(f64, @floatFromInt(self.image_height)));
+        // Calculate the u,v,w unit basis vectors for the camera coordinate frame.
+        self.w = Vec3.unitVector(Vec3.sub(self.lookFrom, self.lookAt));
+        self.u = Vec3.unitVector(Vec3.cross(self.vup, self.w));
+        self.v = Vec3.cross(self.w, self.u);
         // Calculate the vectors across the horizontal and down the vertical viewport edges.
-        const viewport_u = Vec3.initWithValues(viewport_width, 0, 0);
-        const viewport_v = Vec3.initWithValues(0, -viewport_height, 0);
+        const viewport_u = Vec3.mulScalar(viewport_width, self.u);
+        const viewport_v = Vec3.mulScalar(viewport_height, Vec3.negate(self.v));
         // Calculate the horizontal and vertical delta vectors from pixel to pixel.
         self.pixel_delta_u = Vec3.divScalar(viewport_u, @as(f64, @floatFromInt(self.image_width)));
         self.pixel_delta_v = Vec3.divScalar(viewport_v, @as(f64, @floatFromInt(self.image_height)));
         // Calculate the location of the upper left pixel.
-        const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.initWithValues(0, 0, focal_length)), Vec3.divScalar(viewport_u, 2)), Vec3.divScalar(viewport_v, 2));
+        const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.mulScalar(focal_length, self.w)), Vec3.divScalar(viewport_u, 2.0)), Vec3.divScalar(viewport_v, 2.0));
         self.pixel00_loc = Vec3.add(viewport_upper_left, Vec3.mulScalar(0.5, Vec3.add(self.pixel_delta_u, self.pixel_delta_v)));
     }
     fn sampleSquare() Vec3 {
@@ -653,7 +657,7 @@ pub fn main() !void {
     const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
     const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
     const material_left = Dielectric.init(1.50).toMaterial();
-    const material_bubble = Dielectric.init(1.0 / 1.50).toMaterial();
+    const material_bubble = Dielectric.init(1.00 / 1.50).toMaterial();
     const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
 
     // Spheres
@@ -669,6 +673,10 @@ pub fn main() !void {
     cam.image_width = 400;
     cam.samples_per_pixel = 100;
     cam.max_depth = 50;
+    cam.vfov = 20;
+    cam.lookFrom = Point3.initWithValues(-2.0, 2.0, 1.0);
+    cam.lookAt = Point3.initWithValues(0.0, 0.0, -1.0);
+    cam.vup = Vec3.initWithValues(0.0, 1.0, 0.0);
 
     // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
