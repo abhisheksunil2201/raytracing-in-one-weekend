@@ -161,6 +161,16 @@ pub const Vec3 = struct {
     pub fn print(v: Vec3) void {
         std.debug.print("{d} {d} {d}\n", .{ v.e[0], v.e[1], v.e[2] });
     }
+
+    pub fn nearZero(self: Vec3) bool {
+        const s = 1e-8;
+        return (@abs(self.e[0]) < s) and (@abs(self.e[1]) < s) and (@abs(self.e[2]) < s);
+    }
+
+    pub fn reflect(v: Vec3, n: Vec3) Vec3 {
+        //reflection formula
+        return Vec3.sub(v, Vec3.mulScalar(2 * Vec3.dot(v, n), n));
+    }
 };
 
 pub const Ray = struct {
@@ -189,6 +199,18 @@ pub const Ray = struct {
     }
 };
 
+pub const Material = struct {
+    const VTable = struct {
+        scatter: *const fn (self: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool,
+    };
+
+    ptr: *const anyopaque,
+    vtable: *const VTable,
+    pub fn scatter(self: Material, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
+        return self.vtable.scatter(self.ptr, r_in, rec, attenuation, scattered);
+    }
+};
+
 pub fn writeColor(writer: anytype, pixel_color: Color) !void {
     var r = pixel_color.x();
     var g = pixel_color.y();
@@ -211,9 +233,15 @@ pub fn ray_color(r: Ray, depth: i32, world: *const Hittable) Color {
 
     var rec: HitRecord = undefined;
     if (world.hit(r, Interval.initWithValues(0.001, infinity), &rec)) {
+        var scattered: Ray = undefined;
+        var attenuation: Color = undefined;
+        if (rec.mat.?.scatter(r, &rec, &attenuation, &scattered)) {
+            return Vec3.mulVec(attenuation, ray_color(scattered, depth - 1, world));
+        }
+        return Color.init();
         //Randomly generating vector using Lambertian distribution(more pronounced shadow)
-        const direction = Vec3.add(rec.normal, Vec3.randomOnHemisphere(rec.normal));
-        return Vec3.mulScalar(0.7, ray_color(Ray.initWithOriginAndDirection(rec.p, direction), depth - 1, world));
+        //const direction = Vec3.add(rec.normal, Vec3.randomOnHemisphere(rec.normal));
+        //return Vec3.mulScalar(0.7, ray_color(Ray.initWithOriginAndDirection(rec.p, direction), depth - 1, world));
         //0.5 is the reflectance
     }
 
@@ -224,9 +252,14 @@ pub fn ray_color(r: Ray, depth: i32, world: *const Hittable) Color {
     return Vec3.add(Vec3.mulScalar(1.0 - a, white), Vec3.mulScalar(a, blue));
 }
 
+//HitRecord is just a way to stuff a bunch of arguments into a class so we can send
+//them as a group. When a ray hits a surface (a particular sphere for example),
+//the material pointer in the HitRecord will be set to point at the material pointer
+//the sphere was given when it was set up in main() when we start.
 pub const HitRecord = struct {
     p: Point3,
     normal: Vec3,
+    mat: ?*const Material,
     t: f64,
     front_face: bool,
 
@@ -252,11 +285,13 @@ pub const Hittable = struct {
 pub const Sphere = struct {
     center: Point3,
     radius: f64,
+    mat: Material,
 
-    pub fn init(center: Point3, radius: f64) Sphere {
+    pub fn init(center: Point3, radius: f64, mat: Material) Sphere {
         return Sphere{
             .center = center,
             .radius = if (radius > 0) radius else 0,
+            .mat = mat,
         };
     }
 
@@ -293,7 +328,54 @@ pub const Sphere = struct {
         rec.p = r.at(rec.t);
         const outward_normal = Vec3.divScalar(Vec3.sub(rec.p, self.center), self.radius);
         rec.set_face_normal(r, outward_normal);
+        rec.mat = &self.mat;
 
+        return true;
+    }
+};
+
+pub const Lambertian = struct {
+    albedo: Color, // Latin for whiteness. Used to define some form of fractional reflectance.
+    const material_vtable = Material.VTable{ .scatter = scatterImpl };
+
+    pub fn init(albedo: Color) Lambertian {
+        return Lambertian{ .albedo = albedo };
+    }
+
+    pub fn toMaterial(self: *const Lambertian) Material {
+        return Material{ .ptr = self, .vtable = &material_vtable };
+    }
+
+    fn scatterImpl(ctx: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
+        _ = r_in; //ignore
+        const self: *const Lambertian = @ptrCast(@alignCast(ctx));
+        var scatter_direction = Vec3.add(rec.normal, Vec3.randomUnitVector());
+
+        // Catch degenerate scatter direction
+        if (scatter_direction.nearZero()) scatter_direction = rec.normal;
+
+        scattered.* = Ray.initWithOriginAndDirection(rec.p, scatter_direction);
+        attenuation.* = self.albedo;
+        return true;
+    }
+};
+
+pub const Metal = struct {
+    albedo: Color,
+    const material_vtable = Material.VTable{ .scatter = scatterImpl };
+    pub fn init(albedo: Color) Metal {
+        return Metal{ .albedo = albedo };
+    }
+
+    pub fn toMaterial(self: *const Metal) Material {
+        return Material{ .ptr = self, .vtable = &material_vtable };
+    }
+
+    fn scatterImpl(ctx: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
+        const self: *const Metal = @ptrCast(@alignCast(ctx));
+        const reflected = Vec3.reflect(r_in.direction(), rec.normal);
+        scattered.* = Ray.initWithOriginAndDirection(rec.p, reflected);
+        attenuation.* = self.albedo;
         return true;
     }
 };
@@ -493,8 +575,18 @@ pub fn main() !void {
     var world = HittableList.init(allocator);
     defer world.deinit();
 
-    try world.add(Sphere.init(Point3.initWithValues(0, 0, -1), 0.5).toHittable());
-    try world.add(Sphere.init(Point3.initWithValues(0, -100.5, -1), 100).toHittable());
+    //Materials
+    const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
+    const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
+    const material_left = Metal.init(Color.initWithValues(0.8, 0.8, 0.8)).toMaterial();
+    const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2)).toMaterial();
+
+    // Spheres
+    try world.add(Sphere.init(Point3.initWithValues(0.0, -100.5, -1.0), 100.0, material_ground).toHittable());
+    try world.add(Sphere.init(Point3.initWithValues(0.0, 0.0, -1.2), 0.5, material_center).toHittable());
+    try world.add(Sphere.init(Point3.initWithValues(-1.0, 0.0, -1.0), 0.5, material_left).toHittable());
+    try world.add(Sphere.init(Point3.initWithValues(1.0, 0.0, -1.0), 0.5, material_right).toHittable());
+
     const hittable_world = world.toHittable();
     var cam = Camera.init();
     cam.aspect_ratio = 16.0 / 9.0;
