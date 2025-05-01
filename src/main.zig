@@ -418,6 +418,14 @@ pub const Dielectric = struct {
         return Material{ .ptr = self, .vtable = &material_vtable };
     }
 
+    fn reflectance(cosine: f64, refraction_index: f64) f64 {
+        //Use Schlick's approximation for reflectance
+        //accurate polynomial expression for calculating reflectivity
+        var r0 = (1 - refraction_index) / (1 + refraction_index);
+        r0 = r0 * r0;
+        return r0 + (1 - r0) * math.pow(f64, (1 - cosine), 5);
+    }
+
     fn scatterImpl(ctx: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
         const self: *const Dielectric = @ptrCast(@alignCast(ctx));
         attenuation.* = Color.initWithValues(1.0, 1.0, 1.0); // No attenuation for glass
@@ -430,7 +438,16 @@ pub const Dielectric = struct {
         const cannot_refract = ri * sin_theta > 1;
         var direction: Vec3 = undefined;
 
-        if (cannot_refract) direction = Vec3.reflect(unit_direction, rec.normal) else direction = Vec3.refract(unit_direction, rec.normal, ri);
+        if (cannot_refract) {
+            direction = Vec3.reflect(unit_direction, rec.normal);
+        } else {
+            const refl_prob = reflectance(cos_theta, ri);
+            if (refl_prob > randomDouble()) {
+                direction = Vec3.reflect(unit_direction, rec.normal);
+            } else {
+                direction = Vec3.refract(unit_direction, rec.normal, ri);
+            }
+        }
 
         scattered.* = Ray.initWithOriginAndDirection(rec.p, direction);
         return true;
@@ -635,13 +652,15 @@ pub fn main() !void {
     //Materials
     const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
     const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
-    const material_left = Dielectric.init(1.0 / 1.33).toMaterial();
+    const material_left = Dielectric.init(1.50).toMaterial();
+    const material_bubble = Dielectric.init(1.0 / 1.50).toMaterial();
     const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
 
     // Spheres
     try world.add(Sphere.init(Point3.initWithValues(0.0, -100.5, -1.0), 100.0, material_ground).toHittable());
     try world.add(Sphere.init(Point3.initWithValues(0.0, 0.0, -1.2), 0.5, material_center).toHittable());
     try world.add(Sphere.init(Point3.initWithValues(-1.0, 0.0, -1.0), 0.5, material_left).toHittable());
+    try world.add(Sphere.init(Point3.initWithValues(-1.0, 0.0, -1.0), 0.4, material_bubble).toHittable());
     try world.add(Sphere.init(Point3.initWithValues(1.0, 0.0, -1.0), 0.5, material_right).toHittable());
 
     const hittable_world = world.toHittable();
