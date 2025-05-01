@@ -171,6 +171,30 @@ pub const Vec3 = struct {
         //reflection formula
         return Vec3.sub(v, Vec3.mulScalar(2 * Vec3.dot(v, n), n));
     }
+
+    //Snell's law
+    //𝜂⋅sin𝜃=𝜂′⋅sin𝜃′
+    //In order to determine the direction of the refracted ray, we have to solve for sin𝜃′
+
+    //sin𝜃′=𝜂𝜂′⋅sin𝜃
+
+    //On the refracted side of the surface there is a refracted ray 𝐑′
+    //and a normal 𝐧′ and there exists an angle, 𝜃′ between them.
+    //We can split 𝐑′ into the parts of the ray that are perpendicular to 𝐧′ and parallel to 𝐧′
+
+    //𝐑′=𝐑′⊥+𝐑′∥
+    //If we solve for 𝐑′⊥ and 𝐑′∥
+    //𝐑′⊥=𝜂𝜂′(𝐑+cos𝜃𝐧)
+    //𝐑′∥=−1−|𝐑′⊥|2‾‾‾‾‾‾‾‾‾‾√𝐧
+    // We can now rewrite 𝐑′⊥ in terms of known quantities:
+    //𝐑′⊥=𝜂𝜂′(𝐑+(−𝐑⋅𝐧)𝐧)
+
+    pub fn refract(uv: Vec3, n: Vec3, etai_over_etat: f64) Vec3 { //eta incident/eta transmitted
+        const cos_theta = @min(Vec3.dot(uv.negate(), n), 1.0);
+        const r_out_perpendicular = Vec3.mulScalar(etai_over_etat, Vec3.add(uv, Vec3.mulScalar(cos_theta, n)));
+        const r_out_parallel = Vec3.mulScalar(-@sqrt(@abs(1.0 - r_out_perpendicular.lengthSquared())), n);
+        return Vec3.add(r_out_perpendicular, r_out_parallel);
+    }
 };
 
 pub const Ray = struct {
@@ -382,6 +406,31 @@ pub const Metal = struct {
     }
 };
 
+pub const Dielectric = struct {
+    refraction_index: f64,
+    const material_vtable = Material.VTable{ .scatter = scatterImpl };
+
+    pub fn init(index_of_refraction: f64) Dielectric {
+        return Dielectric{ .refraction_index = index_of_refraction };
+    }
+
+    pub fn toMaterial(self: *const Dielectric) Material {
+        return Material{ .ptr = self, .vtable = &material_vtable };
+    }
+
+    fn scatterImpl(ctx: *const anyopaque, r_in: Ray, rec: *const HitRecord, attenuation: *Color, scattered: *Ray) bool {
+        const self: *const Dielectric = @ptrCast(@alignCast(ctx));
+        attenuation.* = Color.initWithValues(1.0, 1.0, 1.0); // No attenuation for glass
+        const ri = if (rec.front_face) (1.0 / self.refraction_index) else self.refraction_index;
+
+        const unit_direction = Vec3.unitVector(r_in.direction());
+        const refracted = Vec3.refract(unit_direction, rec.normal, ri);
+
+        scattered.* = Ray.initWithOriginAndDirection(rec.p, refracted);
+        return true;
+    }
+};
+
 pub const HittableList = struct {
     objects: std.ArrayList(Hittable),
 
@@ -580,7 +629,7 @@ pub fn main() !void {
     //Materials
     const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
     const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
-    const material_left = Metal.init(Color.initWithValues(0.8, 0.8, 0.8), 0.3).toMaterial();
+    const material_left = Dielectric.init(1.50).toMaterial();
     const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
 
     // Spheres
