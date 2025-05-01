@@ -424,9 +424,15 @@ pub const Dielectric = struct {
         const ri = if (rec.front_face) (1.0 / self.refraction_index) else self.refraction_index;
 
         const unit_direction = Vec3.unitVector(r_in.direction());
-        const refracted = Vec3.refract(unit_direction, rec.normal, ri);
+        const cos_theta = @min(Vec3.dot(Vec3.negate(unit_direction), rec.normal), 1);
+        const sin_theta = math.sqrt(1 - cos_theta * cos_theta);
 
-        scattered.* = Ray.initWithOriginAndDirection(rec.p, refracted);
+        const cannot_refract = ri * sin_theta > 1;
+        var direction: Vec3 = undefined;
+
+        if (cannot_refract) direction = Vec3.reflect(unit_direction, rec.normal) else direction = Vec3.refract(unit_direction, rec.normal, ri);
+
+        scattered.* = Ray.initWithOriginAndDirection(rec.p, direction);
         return true;
     }
 };
@@ -629,7 +635,7 @@ pub fn main() !void {
     //Materials
     const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
     const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
-    const material_left = Dielectric.init(1.50).toMaterial();
+    const material_left = Dielectric.init(1.0 / 1.33).toMaterial();
     const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
 
     // Spheres
