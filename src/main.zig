@@ -137,6 +137,13 @@ pub const Vec3 = struct {
         }
     }
 
+    pub fn randomInUnitDisk() Vec3 {
+        while (true) {
+            const p = Vec3.initWithValues(randomDoubleRange(-1, 1), randomDoubleRange(-1, 1), 0);
+            if (p.lengthSquared() < 1) return p;
+        }
+    }
+
     pub fn linearToGamma(linear_component: f64) f64 {
         //to go from linear to gamma, we take inverse of gamma2
         //i.e. exponent of 1/gamma -> square root
@@ -581,6 +588,11 @@ pub const Camera = struct {
     lookFrom: Point3 = Point3.init(),
     lookAt: Point3 = Point3.initWithValues(0.0, 0.0, -1.0),
     vup: Vec3 = Vec3.initWithValues(0.0, 1.0, 0.0),
+    defocus_angle: f64 = 0, // Variantion angle of rays through each pixel
+    focus_dist: f64 = 10, // Distance from camera lookfrom point to plane of perfect focus
+    defocus_disk_u: Vec3 = undefined, // Defocus disk horizontal radius
+    defocus_disk_v: Vec3 = undefined, // Defocus disk vertical radius
+
     pub fn init() Camera {
         return Camera{};
     }
@@ -588,10 +600,10 @@ pub const Camera = struct {
         self.image_height = @intFromFloat(@as(f64, @floatFromInt(self.image_width)) / self.aspect_ratio);
         self.image_height = if (self.image_height < 1) 1 else self.image_height;
         self.center = self.lookFrom;
-        const focal_length: f64 = Point3.length(Point3.sub(self.lookFrom, self.lookAt));
+        // const focal_length: f64 = Point3.length(Point3.sub(self.lookFrom, self.lookAt));
         const theta = degreesToRadians(self.vfov);
         const h = @tan(theta / 2);
-        const viewport_height: f64 = 2.0 * h * focal_length;
+        const viewport_height: f64 = 2.0 * h * self.focus_dist;
         const viewport_width: f64 = viewport_height * (@as(f64, @floatFromInt(self.image_width)) / @as(f64, @floatFromInt(self.image_height)));
         // Calculate the u,v,w unit basis vectors for the camera coordinate frame.
         self.w = Vec3.unitVector(Vec3.sub(self.lookFrom, self.lookAt));
@@ -604,20 +616,33 @@ pub const Camera = struct {
         self.pixel_delta_u = Vec3.divScalar(viewport_u, @as(f64, @floatFromInt(self.image_width)));
         self.pixel_delta_v = Vec3.divScalar(viewport_v, @as(f64, @floatFromInt(self.image_height)));
         // Calculate the location of the upper left pixel.
-        const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.mulScalar(focal_length, self.w)), Vec3.divScalar(viewport_u, 2.0)), Vec3.divScalar(viewport_v, 2.0));
+        const viewport_upper_left = Vec3.sub(Vec3.sub(Vec3.sub(self.center, Vec3.mulScalar(self.focus_dist, self.w)), Vec3.divScalar(viewport_u, 2.0)), Vec3.divScalar(viewport_v, 2.0));
         self.pixel00_loc = Vec3.add(viewport_upper_left, Vec3.mulScalar(0.5, Vec3.add(self.pixel_delta_u, self.pixel_delta_v)));
+        // Calculate the camera defocus disk basis vectors
+        const defocus_radius: f64 = self.focus_dist * @tan(degreesToRadians(self.defocus_angle / 2));
+        self.defocus_disk_u = Vec3.mulScalar(defocus_radius, self.u);
+        self.defocus_disk_v = Vec3.mulScalar(defocus_radius, self.v);
     }
     fn sampleSquare() Vec3 {
         // Returns a random point in the [-0.5, -0.5]-[+0.5, +0.5] unit square
         return Vec3.initWithValues(randomDouble() - 0.5, // Using your existing random function
             randomDouble() - 0.5, 0);
     }
+    fn defocusDiskSample(self: *const Camera) Vec3 {
+        //Returns a random point in the camera defocus disk
+        const p = Vec3.randomInUnitDisk();
+        return Vec3.add(self.center, Vec3.add(Vec3.mulScalar(p.x(), self.defocus_disk_u), Vec3.mulScalar(p.y(), self.defocus_disk_v)));
+    }
     pub fn getRay(self: *const Camera, i: u32, j: u32) Ray {
+        // Construct a camera ray originating from the defocus disk and directed at a randomly
+        // sampled point around the pixel location i, j.
+
         // Get random offset within pixel
         const offset = sampleSquare();
         // Calculate sample position
         const pixel_sample = Vec3.add(Vec3.add(self.pixel00_loc, Vec3.mulScalar(@as(f64, @floatFromInt(i)) + offset.x(), self.pixel_delta_u)), Vec3.mulScalar(@as(f64, @floatFromInt(j)) + offset.y(), self.pixel_delta_v));
-        const ray_origin = self.center;
+        // const ray_origin = self.center;
+        const ray_origin = if (self.defocus_angle < 0) self.center else self.defocusDiskSample();
         const ray_direction = Vec3.sub(pixel_sample, ray_origin);
 
         return Ray.initWithOriginAndDirection(ray_origin, ray_direction);
@@ -677,6 +702,8 @@ pub fn main() !void {
     cam.lookFrom = Point3.initWithValues(-2.0, 2.0, 1.0);
     cam.lookAt = Point3.initWithValues(0.0, 0.0, -1.0);
     cam.vup = Vec3.initWithValues(0.0, 1.0, 0.0);
+    cam.defocus_angle = 10.0;
+    cam.focus_dist = 3.4;
 
     // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
