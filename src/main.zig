@@ -678,32 +678,63 @@ pub fn main() !void {
     var world = HittableList.init(allocator);
     defer world.deinit();
 
-    //Materials
-    const material_ground = Lambertian.init(Color.initWithValues(0.8, 0.8, 0.0)).toMaterial();
-    const material_center = Lambertian.init(Color.initWithValues(0.1, 0.2, 0.5)).toMaterial();
-    const material_left = Dielectric.init(1.50).toMaterial();
-    const material_bubble = Dielectric.init(1.00 / 1.50).toMaterial();
-    const material_right = Metal.init(Color.initWithValues(0.8, 0.6, 0.2), 1.0).toMaterial();
+    //Ground Material
+    const ground_material = Lambertian.init(Color.initWithValues(0.5, 0.5, 0.5)).toMaterial();
+    try world.add(Sphere.init(Point3.initWithValues(0, -1000, 0), 1000, ground_material).toHittable());
 
-    // Spheres
-    try world.add(Sphere.init(Point3.initWithValues(0.0, -100.5, -1.0), 100.0, material_ground).toHittable());
-    try world.add(Sphere.init(Point3.initWithValues(0.0, 0.0, -1.2), 0.5, material_center).toHittable());
-    try world.add(Sphere.init(Point3.initWithValues(-1.0, 0.0, -1.0), 0.5, material_left).toHittable());
-    try world.add(Sphere.init(Point3.initWithValues(-1.0, 0.0, -1.0), 0.4, material_bubble).toHittable());
-    try world.add(Sphere.init(Point3.initWithValues(1.0, 0.0, -1.0), 0.5, material_right).toHittable());
+    // Random small spheres
+    var a: i32 = -11;
+    while (a < 11) : (a += 1) {
+        var b: i32 = -11;
+        while (b < 11) : (b += 1) {
+            const choose_mat = randomDouble();
+            const center = Point3.initWithValues(@as(f64, @floatFromInt(a)) + 0.9 * randomDouble(), 0.2, @as(f64, @floatFromInt(b)) + 0.9 * randomDouble());
+
+            if (Vec3.length(Vec3.sub(center, Point3.initWithValues(4, 0.2, 0))) > 0.9) {
+                var sphere_material: Material = undefined;
+
+                if (choose_mat < 0.8) {
+                    // Diffuse
+                    const albedo = Vec3.mulVec(Color.random(), Color.random());
+                    sphere_material = Lambertian.init(albedo).toMaterial();
+                    try world.add(Sphere.init(center, 0.2, sphere_material).toHittable());
+                } else if (choose_mat < 0.95) {
+                    // Metal
+                    const albedo = Color.randomInRange(0.5, 1);
+                    const fuzz = randomDoubleRange(0, 0.5);
+                    sphere_material = Metal.init(albedo, fuzz).toMaterial();
+                    try world.add(Sphere.init(center, 0.2, sphere_material).toHittable());
+                } else {
+                    // Glass
+                    sphere_material = Dielectric.init(1.5).toMaterial();
+                    try world.add(Sphere.init(center, 0.2, sphere_material).toHittable());
+                }
+            }
+        }
+    }
+
+    // Large spheres
+    const material1 = Dielectric.init(1.5).toMaterial();
+    try world.add(Sphere.init(Point3.initWithValues(0, 1, 0), 1.0, material1).toHittable());
+
+    const material2 = Lambertian.init(Color.initWithValues(0.4, 0.2, 0.1)).toMaterial();
+    try world.add(Sphere.init(Point3.initWithValues(-4, 1, 0), 1.0, material2).toHittable());
+
+    const material3 = Metal.init(Color.initWithValues(0.7, 0.6, 0.5), 0.0).toMaterial();
+    try world.add(Sphere.init(Point3.initWithValues(4, 1, 0), 1.0, material3).toHittable());
 
     const hittable_world = world.toHittable();
     var cam = Camera.init();
     cam.aspect_ratio = 16.0 / 9.0;
-    cam.image_width = 400;
-    cam.samples_per_pixel = 100;
+    cam.image_width = 1200;
+    cam.samples_per_pixel = 500;
     cam.max_depth = 50;
     cam.vfov = 20;
-    cam.lookFrom = Point3.initWithValues(-2.0, 2.0, 1.0);
-    cam.lookAt = Point3.initWithValues(0.0, 0.0, -1.0);
+    cam.lookFrom = Point3.initWithValues(13.0, 2.0, 3.0);
+    cam.lookAt = Point3.initWithValues(0.0, 0.0, 0.0);
     cam.vup = Vec3.initWithValues(0.0, 1.0, 0.0);
-    cam.defocus_angle = 10.0;
-    cam.focus_dist = 3.4;
+    cam.defocus_angle = 0.6;
+    cam.focus_dist = 10.0;
 
     // Render
     const file = try std.fs.cwd().createFile("output.ppm", .{});
